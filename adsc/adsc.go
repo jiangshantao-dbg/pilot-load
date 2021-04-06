@@ -25,6 +25,9 @@ import (
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"google.golang.org/grpc"
 
+	"github.com/gogo/protobuf/types"
+	meshconfig "istio.io/api/mesh/v1alpha1"
+	istiomodel "istio.io/istio/pilot/pkg/model"
 	"istio.io/pkg/log"
 )
 
@@ -100,6 +103,7 @@ type Responses struct {
 	Listeners map[string]proto.Message
 	Routes    map[string]proto.Message
 	Endpoints map[string]proto.Message
+	Secrets   map[string]proto.Message
 }
 
 type Watch struct {
@@ -122,6 +126,7 @@ func Dial(url string, opts *Config) (*ADSC, error) {
 			Listeners: map[string]proto.Message{},
 			Routes:    map[string]proto.Message{},
 			Endpoints: map[string]proto.Message{},
+			Secrets:   map[string]proto.Message{},
 		},
 		GrpcOpts: opts.GrpcOpts,
 		url:      url,
@@ -287,8 +292,15 @@ func getFilterChains(l *listener.Listener) []*listener.FilterChain {
 // nolint: staticcheck
 func (a *ADSC) handleLDS(ll []*listener.Listener) {
 	routes := []string{}
+	secrets := []string{}
 	for _, l := range ll {
 		for _, fc := range getFilterChains(l) {
+			sock := fc.TransportSocket
+			if sock != nil {
+				if sock.GetTypedConfig() != nil {
+					
+				}
+			}
 			for _, f := range fc.GetFilters() {
 				if f.GetTypedConfig().GetTypeUrl() == "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager" {
 					hcm := &envoy_extensions_filters_network_http_connection_manager_v3.HttpConnectionManager{}
@@ -434,7 +446,31 @@ func (a *ADSC) makeNode() *core.Node {
 		panic("invalid metadata " + err.Error())
 	}
 
-	n.Metadata = meta
+	n.Metadata = istiomodel.NodeMetadata{
+		IstioVersion:   "1.9.1",
+		ClusterID:      "cluster1",
+		Labels:         a.Metadata["LABELS"].(map[string]string),
+		Namespace:      a.Metadata["NAMESPACE"].(string),
+		RouterMode:     "standard",
+		ServiceAccount: "istio-gateway-service-account",
+		ProxyConfig: (*istiomodel.NodeMetaProxyConfig)(&meshconfig.ProxyConfig{
+			ConfigPath:               "./etc/istio/proxy",
+			BinaryPath:               "/usr/local/bin/envoy",
+			DrainDuration:            &types.Duration{Seconds: 45},
+			ParentShutdownDuration:   &types.Duration{Seconds: 60},
+			DiscoveryAddress:         "istiod-v0109.mt-istio-system.svc.cluster.local",
+			ProxyAdminPort:           15000,
+			ControlPlaneAuthPolicy:   meshconfig.AuthenticationPolicy_MUTUAL_TLS,
+			Concurrency:              &types.Int32Value{Value: 2},
+			StatNameLength:           189,
+			Tracing:                  &meshconfig.Tracing{Tracer: &meshconfig.Tracing_Zipkin_{Zipkin: &meshconfig.Tracing_Zipkin{Address: "zipkin.mt-istio-system:9411"}}},
+			ProxyMetadata:            map[string]string{"ISTIO_META_DNS_CAPTURE": "false", "ISTIO_META_PROXY_XDS_VIA_AGENT": "false"},
+			StatusPort:               15020,
+			TerminationDrainDuration: &types.Duration{Seconds: 5},
+			MeshId:                   "cluster.local",
+			ServiceCluster:           "istio-gateway-biz-common",
+		}),
+	}.ToStruct()
 
 	return n
 }

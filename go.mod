@@ -8,6 +8,7 @@ require (
 	github.com/envoyproxy/go-control-plane v0.9.9-0.20210115003313-31f9241a16e6
 	github.com/felixge/fgprof v0.9.1
 	github.com/ghodss/yaml v1.0.0
+	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.4.3
 	github.com/google/go-cmp v0.5.5
 	github.com/lthibault/jitterbug v2.0.0+incompatible

@@ -66,7 +66,7 @@ func Determinism(a model.Args) error {
 }
 
 func Cluster(a model.Args) error {
-	sim := cluster.NewCluster(cluster.ClusterSpec{a.ClusterConfig})
+	sim := cluster.NewCluster(cluster.ClusterSpec{Config: a.ClusterConfig})
 	if err := ExecuteSimulations(a, sim); err != nil {
 		return fmt.Errorf("error executing: %v", err)
 	}

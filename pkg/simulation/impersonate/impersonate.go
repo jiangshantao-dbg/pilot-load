@@ -56,8 +56,8 @@ func (i *ImpersonateSimulation) Run(ctx model.Context) error {
 				Namespace: pod.Namespace,
 				Name:      pod.Name,
 				IP:        ip,
-				Cluster:   "",
-				PodType:   "",
+				Cluster:   "cluster1",
+				PodType:   model.GatewayType,
 				GrpcOpts:  ctx.Args.Auth.GrpcOptions(pod.Spec.ServiceAccountName, pod.Namespace),
 			}
 			log.Infof("Starting pod %v/%v (%v), replica %d", pod.Name, pod.Namespace, ip, n)
@@ -83,7 +83,7 @@ func (i *ImpersonateSimulation) Cleanup(ctx model.Context) error {
 func getLabelSelector(selector model.Selector) klabels.Selector {
 	switch selector {
 	case model.SidecarSelector:
-		s, _ := klabels.Parse("security.istio.io/tlsMode")
+		s, _ := klabels.Parse("istio=ingressgateway")
 		return s
 	case model.ExternalSelector:
 		s, _ := klabels.Parse("!security.istio.io/tlsMode")

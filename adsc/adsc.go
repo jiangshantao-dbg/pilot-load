@@ -17,6 +17,7 @@ import (
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	envoy_extensions_filters_network_http_connection_manager_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	transport_sockets_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/golang/protobuf/jsonpb"
@@ -205,7 +206,19 @@ func (a *ADSC) Run() error {
 	}
 	a.stream = edsstr
 	go a.handleRecv()
+	go a.handleUpdateChan()
 	return nil
+}
+
+func (a *ADSC) handleUpdateChan() {
+	for {
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case t := <-a.Updates:
+			scope.Infof("handle update %s", t)
+		case <-timer.C:
+		}
+	}
 }
 
 func (a *ADSC) handleRecv() {
@@ -224,6 +237,7 @@ func (a *ADSC) handleRecv() {
 		clusters := []*cluster.Cluster{}
 		routes := []*route.RouteConfiguration{}
 		eds := []*endpoint.ClusterLoadAssignment{}
+		secrets := []*transport_sockets_tls_v3.Secret{}
 		// TODO re-enable use of names. For now its skipped
 		names := []string{}
 		resp := map[string]proto.Message{}
@@ -251,6 +265,12 @@ func (a *ADSC) handleRecv() {
 				routes = append(routes, ll)
 				names = append(names, ll.Name)
 				resp[ll.Name] = ll
+			} else if rsc.TypeUrl == resource.SecretType {
+				ll := &transport_sockets_tls_v3.Secret{}
+				_ = proto.Unmarshal(valBytes, ll)
+				secrets = append(secrets, ll)
+				names = append(names, ll.Name)
+				resp[ll.Name] = ll
 			}
 		}
 
@@ -264,6 +284,8 @@ func (a *ADSC) handleRecv() {
 			a.Responses.Endpoints = resp
 		case resource.RouteType:
 			a.Responses.Routes = resp
+		case resource.SecretType:
+			a.Responses.Secrets = resp
 		}
 		a.ack(msg, names)
 		a.mutex.Unlock()
@@ -277,6 +299,8 @@ func (a *ADSC) handleRecv() {
 			a.handleEDS(eds)
 		case resource.RouteType:
 			a.handleRDS(routes)
+		case resource.SecretType:
+			a.handleSDS(secrets)
 		}
 	}
 }
@@ -295,10 +319,16 @@ func (a *ADSC) handleLDS(ll []*listener.Listener) {
 	secrets := []string{}
 	for _, l := range ll {
 		for _, fc := range getFilterChains(l) {
-			sock := fc.TransportSocket
-			if sock != nil {
-				if sock.GetTypedConfig() != nil {
-					
+			transportSocket := fc.TransportSocket
+			if transportSocket != nil {
+				if transportSocket.GetTypedConfig() != nil {
+					if transportSocket.GetTypedConfig().GetTypeUrl() == "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext" {
+						downstreamTlsContext := &transport_sockets_tls_v3.DownstreamTlsContext{}
+						_ = ptypes.UnmarshalAny(transportSocket.GetTypedConfig(), downstreamTlsContext)
+						for _, secret := range downstreamTlsContext.CommonTlsContext.GetTlsCertificateSdsSecretConfigs() {
+							secrets = append(secrets, secret.Name)
+						}
+					}
 				}
 			}
 			for _, f := range fc.GetFilters() {
@@ -329,6 +359,9 @@ func (a *ADSC) handleLDS(ll []*listener.Listener) {
 	defer a.mutex.Unlock()
 
 	a.handleResourceUpdate(resource.RouteType, routes)
+	a.handleResourceUpdate(resource.SecretType, secrets)
+
+	scope.Infof("%s receive %d listener", a.nodeID, len(ll))
 
 	select {
 	case a.Updates <- "lds":
@@ -425,6 +458,8 @@ func (a *ADSC) handleCDS(ll []*cluster.Cluster) {
 		a.InitialLoad = true
 	}
 
+	scope.Infof("%s receive %d clusters", a.nodeID, len(ll))
+
 	select {
 	case a.Updates <- "cds":
 	default:
@@ -490,6 +525,8 @@ func (a *ADSC) handleEDS(eds []*endpoint.ClusterLoadAssignment) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
+	scope.Infof("%s receive %d endpoints", a.nodeID, len(eds))
+
 	select {
 	case a.Updates <- "eds":
 	default:
@@ -514,8 +551,36 @@ func (a *ADSC) handleRDS(configurations []*route.RouteConfiguration) {
 		}
 	}
 
+	scope.Infof("%s receive %d routes", a.nodeID, len(configurations))
+
 	select {
 	case a.Updates <- "rds":
+	default:
+	}
+}
+
+func (a *ADSC) handleSDS(secrets []*transport_sockets_tls_v3.Secret) {
+	sds := map[string]*transport_sockets_tls_v3.Secret{}
+
+	for _, r := range secrets {
+		sds[r.Name] = r
+	}
+
+	if dumpScope.DebugEnabled() {
+		for i, r := range secrets {
+			b, err := marshal.MarshalToString(r)
+			if err != nil {
+				dumpScope.Errorf("Error in SDS: %v", err)
+			}
+
+			dumpScope.Debugf("sds %d: %v", i, b)
+		}
+	}
+
+	scope.Infof("%s receive %d secrets", a.nodeID, len(secrets))
+
+	select {
+	case a.Updates <- "sds":
 	default:
 	}
 }

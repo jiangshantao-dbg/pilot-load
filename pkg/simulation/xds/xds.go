@@ -2,8 +2,8 @@ package xds
 
 import (
 	"context"
+	"math/rand"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gogo/protobuf/types"
@@ -37,6 +37,16 @@ func clone(m map[string]string) map[string]interface{} {
 	return n
 }
 
+var ipSet = make(map[string]bool)
+
+func RandomizeIpAddr() string {
+	addr := "192.168." + strconv.FormatInt(rand.Int63n(256), 10) + "." + strconv.FormatInt(rand.Int63n(255), 10)
+	for ipSet[addr] {
+		addr = "192.168." + strconv.FormatInt(rand.Int63n(256), 10) + "." + strconv.FormatInt(rand.Int63n(255), 10)
+	}
+	return addr
+}
+
 func (x *Simulation) Run(ctx model.Context) error {
 	c, cancel := context.WithCancel(ctx.Context)
 	x.cancel = cancel
@@ -45,6 +55,7 @@ func (x *Simulation) Run(ctx model.Context) error {
 	if cluster == "" {
 		cluster = "Kubernetes"
 	}
+	x.IP = RandomizeIpAddr()
 	meta := clone(ctx.Args.Metadata)
 	meta["ISTIO_VERSION"] = "1.20.0-pilot-load"
 	meta["CLUSTER_ID"] = cluster

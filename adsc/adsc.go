@@ -206,19 +206,7 @@ func (a *ADSC) Run() error {
 	}
 	a.stream = edsstr
 	go a.handleRecv()
-	go a.handleUpdateChan()
 	return nil
-}
-
-func (a *ADSC) handleUpdateChan() {
-	for {
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case t := <-a.Updates:
-			scope.Infof("handle update %s", t)
-		case <-timer.C:
-		}
-	}
 }
 
 func (a *ADSC) handleRecv() {
@@ -232,76 +220,80 @@ func (a *ADSC) handleRecv() {
 			return
 		}
 		scope.Debugf("got message for type %v", msg.TypeUrl)
+		go a.handleResponse(msg)
+	}
+}
 
-		listeners := []*listener.Listener{}
-		clusters := []*cluster.Cluster{}
-		routes := []*route.RouteConfiguration{}
-		eds := []*endpoint.ClusterLoadAssignment{}
-		secrets := []*transport_sockets_tls_v3.Secret{}
-		// TODO re-enable use of names. For now its skipped
-		names := []string{}
-		resp := map[string]proto.Message{}
-		for _, rsc := range msg.Resources {
-			valBytes := rsc.Value
-			if rsc.TypeUrl == resource.ListenerType {
-				ll := &listener.Listener{}
-				_ = proto.Unmarshal(valBytes, ll)
-				listeners = append(listeners, ll)
-				resp[ll.Name] = ll
-			} else if rsc.TypeUrl == resource.ClusterType {
-				ll := &cluster.Cluster{}
-				_ = proto.Unmarshal(valBytes, ll)
-				clusters = append(clusters, ll)
-				resp[ll.Name] = ll
-			} else if rsc.TypeUrl == resource.EndpointType {
-				ll := &endpoint.ClusterLoadAssignment{}
-				_ = proto.Unmarshal(valBytes, ll)
-				eds = append(eds, ll)
-				names = append(names, ll.ClusterName)
-				resp[ll.ClusterName] = ll
-			} else if rsc.TypeUrl == resource.RouteType {
-				ll := &route.RouteConfiguration{}
-				_ = proto.Unmarshal(valBytes, ll)
-				routes = append(routes, ll)
-				names = append(names, ll.Name)
-				resp[ll.Name] = ll
-			} else if rsc.TypeUrl == resource.SecretType {
-				ll := &transport_sockets_tls_v3.Secret{}
-				_ = proto.Unmarshal(valBytes, ll)
-				secrets = append(secrets, ll)
-				names = append(names, ll.Name)
-				resp[ll.Name] = ll
-			}
+func (a *ADSC) handleResponse(response *discovery.DiscoveryResponse) {
+	listeners := []*listener.Listener{}
+	clusters := []*cluster.Cluster{}
+	routes := []*route.RouteConfiguration{}
+	eds := []*endpoint.ClusterLoadAssignment{}
+	secrets := []*transport_sockets_tls_v3.Secret{}
+	// TODO re-enable use of names. For now its skipped
+	names := []string{}
+	resp := map[string]proto.Message{}
+	for _, rsc := range response.Resources {
+		valBytes := rsc.Value
+		if rsc.TypeUrl == resource.ListenerType {
+			ll := &listener.Listener{}
+			_ = proto.Unmarshal(valBytes, ll)
+			listeners = append(listeners, ll)
+			resp[ll.Name] = ll
+		} else if rsc.TypeUrl == resource.ClusterType {
+			ll := &cluster.Cluster{}
+			_ = proto.Unmarshal(valBytes, ll)
+			clusters = append(clusters, ll)
+			resp[ll.Name] = ll
+		} else if rsc.TypeUrl == resource.EndpointType {
+			ll := &endpoint.ClusterLoadAssignment{}
+			_ = proto.Unmarshal(valBytes, ll)
+			eds = append(eds, ll)
+			names = append(names, ll.ClusterName)
+			resp[ll.ClusterName] = ll
+		} else if rsc.TypeUrl == resource.RouteType {
+			ll := &route.RouteConfiguration{}
+			_ = proto.Unmarshal(valBytes, ll)
+			routes = append(routes, ll)
+			names = append(names, ll.Name)
+			resp[ll.Name] = ll
+		} else if rsc.TypeUrl == resource.SecretType {
+			ll := &transport_sockets_tls_v3.Secret{}
+			_ = proto.Unmarshal(valBytes, ll)
+			secrets = append(secrets, ll)
+			names = append(names, ll.Name)
+			resp[ll.Name] = ll
 		}
+	}
 
-		a.mutex.Lock()
-		switch msg.TypeUrl {
-		case resource.ListenerType:
-			a.Responses.Listeners = resp
-		case resource.ClusterType:
-			a.Responses.Clusters = resp
-		case resource.EndpointType:
-			a.Responses.Endpoints = resp
-		case resource.RouteType:
-			a.Responses.Routes = resp
-		case resource.SecretType:
-			a.Responses.Secrets = resp
-		}
-		a.ack(msg, names)
-		a.mutex.Unlock()
+	a.mutex.Lock()
+	switch response.TypeUrl {
+	case resource.ListenerType:
+		a.Responses.Listeners = resp
+	case resource.ClusterType:
+		a.Responses.Clusters = resp
+	case resource.EndpointType:
+		a.Responses.Endpoints = resp
+	case resource.RouteType:
+		a.Responses.Routes = resp
+	case resource.SecretType:
+		a.Responses.Secrets = resp
+	}
+	a.mutex.Unlock()
 
-		switch msg.TypeUrl {
-		case resource.ListenerType:
-			a.handleLDS(listeners)
-		case resource.ClusterType:
-			a.handleCDS(clusters)
-		case resource.EndpointType:
-			a.handleEDS(eds)
-		case resource.RouteType:
-			a.handleRDS(routes)
-		case resource.SecretType:
-			a.handleSDS(secrets)
-		}
+	a.ack(response, names)
+
+	switch response.TypeUrl {
+	case resource.ListenerType:
+		a.handleLDS(listeners)
+	case resource.ClusterType:
+		a.handleCDS(clusters)
+	case resource.EndpointType:
+		a.handleEDS(eds)
+	case resource.RouteType:
+		a.handleRDS(routes)
+	case resource.SecretType:
+		a.handleSDS(secrets)
 	}
 }
 
@@ -355,9 +347,6 @@ func (a *ADSC) handleLDS(ll []*listener.Listener) {
 		}
 	}
 
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-
 	a.handleResourceUpdate(resource.RouteType, routes)
 	a.handleResourceUpdate(resource.SecretType, secrets)
 
@@ -365,7 +354,6 @@ func (a *ADSC) handleLDS(ll []*listener.Listener) {
 
 	select {
 	case a.Updates <- "lds":
-	default:
 	}
 }
 
@@ -462,7 +450,6 @@ func (a *ADSC) handleCDS(ll []*cluster.Cluster) {
 
 	select {
 	case a.Updates <- "cds":
-	default:
 	}
 }
 
@@ -522,14 +509,10 @@ func (a *ADSC) handleEDS(eds []*endpoint.ClusterLoadAssignment) {
 		}
 	}
 
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-
 	scope.Infof("%s receive %d endpoints", a.nodeID, len(eds))
 
 	select {
 	case a.Updates <- "eds":
-	default:
 	}
 }
 
@@ -555,7 +538,6 @@ func (a *ADSC) handleRDS(configurations []*route.RouteConfiguration) {
 
 	select {
 	case a.Updates <- "rds":
-	default:
 	}
 }
 
@@ -581,7 +563,6 @@ func (a *ADSC) handleSDS(secrets []*transport_sockets_tls_v3.Secret) {
 
 	select {
 	case a.Updates <- "sds":
-	default:
 	}
 }
 

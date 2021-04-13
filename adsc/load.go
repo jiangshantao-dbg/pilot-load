@@ -89,6 +89,7 @@ func Connect(pilotAddress string, config *Config) {
 		for !exit {
 			select {
 			case u := <-con.Updates:
+				log("receive update event:%s", u)
 				if u == "close" {
 					// Close triggered. This may mean Pilot is just disconnecting, scaling, etc
 					// Try the whole loop again
